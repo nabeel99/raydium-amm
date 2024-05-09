@@ -326,7 +326,7 @@ impl Processor {
     }
 
     /// The Detailed calculation of pnl
-    /// 1. calc last_k witch dose not take pnl: last_k = calc_pnl_x * calc_pnl_y;
+    /// 1. calc last_k which dose not take pnl: last_k = calc_pnl_x * calc_pnl_y;
     /// 2. calc current price: current_price = current_x / current_y;
     /// 3. calc x after take pnl: x_after_take_pnl = sqrt(last_k * current_price);
     /// 4. calc y after take pnl: y_after_take_pnl = x_after_take_pnl / current_price;
@@ -344,18 +344,21 @@ impl Processor {
         // calc pnl
         let mut delta_x: u128;
         let mut delta_y: u128;
+        //old y
         let calc_pc_amount = Calculator::restore_decimal(
             target.calc_pnl_x.into(),
             amm.pc_decimals,
             amm.sys_decimal_value,
         );
+        //old x
         let calc_coin_amount = Calculator::restore_decimal(
             target.calc_pnl_y.into(),
             amm.coin_decimals,
             amm.sys_decimal_value,
         );
         let pool_pc_amount = U128::from(*total_pc_without_take_pnl);
-        let pool_coin_amount = U128::from(*total_coin_without_take_pnl);
+        let pool_coin_amount: U128 = U128::from(*total_coin_without_take_pnl);
+        //new k is more than last k
         if pool_pc_amount.checked_mul(pool_coin_amount).unwrap()
             >= (calc_pc_amount).checked_mul(calc_coin_amount).unwrap()
         {
@@ -365,28 +368,36 @@ impl Processor {
             // let current_k: u128 = (x1 as u128).checked_mul(y1 as u128).unwrap();
             // current p is
             // let current_p: u128 = (x1 as u128).checked_div(y1 as u128).unwrap();
+            
+            //equation (9 & 10) sqrt(x-last*y-last*x-current/y-current)
+            //x2_power = x-after^2
             let x2_power = Calculator::calc_x_power(
                 target.calc_pnl_x.into(),
                 target.calc_pnl_y.into(),
                 x1,
                 y1,
             );
-            // let x2 = Calculator::sqrt(x2_power).unwrap();
+            //x2 = sqrt(x2_power) = x-after eq (10)
             let x2 = x2_power.integer_sqrt();
-            // msg!(arrform!(LOG_SIZE, "calc_take_pnl x2_power:{}, x2:{}", x2_power, x2).as_str());
+            //y-after = (xafter * y-current)/x-current eq (11)
             let y2 = x2.checked_mul(y1).unwrap().checked_div(x1).unwrap();
             // msg!(arrform!(LOG_SIZE, "calc_take_pnl y2:{}", y2).as_str());
 
             // transfer to token_coin_pnl and token_pc_pnl
             // (x1 -x2) * pnl / sys_decimal_value
+            //eq (11) xlast - x after
             let diff_x = U128::from(x1.checked_sub(x2).unwrap().as_u128());
+            //eq(11) y last - y after
             let diff_y = U128::from(y1.checked_sub(y2).unwrap().as_u128());
-            delta_x = diff_x
+            //calc fees per the protocol params
+            //xpnl = alpha(fees) * delta x
+             delta_x = diff_x
                 .checked_mul(amm.fees.pnl_numerator.into())
                 .unwrap()
                 .checked_div(amm.fees.pnl_denominator.into())
                 .unwrap()
                 .as_u128();
+            //ypnl = alpha(fees) * delta y
             delta_y = diff_y
                 .checked_mul(amm.fees.pnl_numerator.into())
                 .unwrap()
@@ -595,6 +606,7 @@ impl Processor {
         associated_owner_account: &'a AccountInfo<'b>,
         associated_seed: &[u8],
     ) -> ProgramResult {
+
         let (associated_token_address, bump_seed) = get_associated_address_and_bump_seed(
             program_id,
             &market_account.key,
@@ -687,6 +699,12 @@ impl Processor {
         associated_seed: &[u8],
         mint_decimals: u8,
     ) -> ProgramResult {
+        //for lp mint,
+        //program id is raydium amm id
+        //market_account is opendex/serum market account key,
+        //associated seed is - >
+        //program id is again raydium id 
+        //associated token address is actually the mint
         let (associated_token_address, bump_seed) = get_associated_address_and_bump_seed(
             program_id,
             &market_account.key,
@@ -777,6 +795,11 @@ impl Processor {
         associated_seed: &[u8],
         data_size: usize,
     ) -> ProgramResult {
+        //amm info acc
+        //program id is raydium id
+        //market_account is random
+        //associated seed
+        //program id is raydium id
         let (associated_token_address, bump_seed) = get_associated_address_and_bump_seed(
             &program_id,
             &market_account.key,
@@ -954,6 +977,7 @@ impl Processor {
 
         // create lp mint account
         let lp_decimals = coin_mint.decimals;
+        //amm_lp_mint_info is the mint key address
         Self::generate_amm_associated_spl_mint(
             program_id,
             spl_token_program_id,
@@ -1386,7 +1410,8 @@ impl Processor {
             amm.coin_decimals,
             amm.sys_decimal_value,
         );
-        // calc and update pnl
+        // calc and update pnl, unaccount for tracking, subtractin reserves after syncing real protocol fees
+        //from the orders in openbook
         let (delta_x, delta_y) = Self::calc_take_pnl(
             &target_orders,
             &mut amm,
@@ -1421,12 +1446,15 @@ impl Processor {
         let deduct_pc_amount;
         let deduct_coin_amount;
         let mint_lp_amount;
+        //depositing base coin, find equivalent pc 
         if deposit.base_side == 0 {
             // base coin
+            //convert coin to pc
             deduct_pc_amount = invariant
                 .exchange_coin_to_pc(deposit.max_coin_amount, RoundDirection::Ceiling)
                 .ok_or(AmmError::CalculationExRateFailure)?;
             deduct_coin_amount = deposit.max_coin_amount;
+            //slippage error, exceeds implicit price 
             if deduct_pc_amount > deposit.max_pc_amount {
                 encode_ray_log(DepositLog {
                     log_type: LogType::Deposit.into_u8(),
@@ -1445,10 +1473,12 @@ impl Processor {
                 return Err(AmmError::ExceededSlippage.into());
             }
             // coin_amount/ (total_coin_amount + coin_amount)  = output / (lp_mint.supply + output) =>  output = coin_amount / total_coin_amount * lp_mint.supply
+            //no price movement
             let invariant_coin = InvariantPool {
                 token_input: deduct_coin_amount,
                 token_total: total_coin_without_take_pnl,
             };
+            //50 -50 so it only uses one part of the liquidity
             mint_lp_amount = invariant_coin
                 .exchange_token_to_pool(amm.lp_amount, RoundDirection::Floor)
                 .ok_or(AmmError::CalculationExRateFailure)?;
@@ -1554,7 +1584,7 @@ impl Processor {
             .as_u128();
         Ok(())
     }
-
+    //admin only
     pub fn process_withdrawpnl(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
         const ACCOUNT_LEN: usize = 17;
         let input_account_len = accounts.len();
@@ -1964,10 +1994,14 @@ impl Processor {
         if withdraw.amount > user_source_lp.amount {
             return Err(AmmError::InsufficientFunds.into());
         }
+        //ensure withdraw amount is 1 < lp _ amount
         if withdraw.amount > lp_mint.supply || withdraw.amount >= amm.lp_amount {
             return Err(AmmError::NotAllowZeroLP.into());
         }
-        let (mut total_pc_without_take_pnl, mut total_coin_without_take_pnl) = if enable_orderbook {
+        let (mut total_pc_without_take_pnl, mut total_coin_without_take_pnl) =
+        
+        //cancels order book orders(asks and bids) ifZ
+         if enable_orderbook {
             // check account
             check_assert_eq!(
                 *market_info.key,
@@ -2002,6 +2036,7 @@ impl Processor {
             let mut amm_order_ids_vec = Vec::new();
             let mut order_ids = [0u64; 8];
             let mut count = 0;
+            //gets all order ids and stores them in amm_order_ids_vec
             for i in 0..std::cmp::max(bids.len(), asks.len()) {
                 if i < bids.len() {
                     order_ids[count] = bids[i].client_order_id();
@@ -2017,9 +2052,11 @@ impl Processor {
                     count = 0;
                 }
             }
+            //last iteration of the loop when <8 order ids are left
             if count != 0 {
                 amm_order_ids_vec.push(order_ids);
             }
+            //cancel dex order and then settle, no need to sync
             for ids in amm_order_ids_vec.iter() {
                 Invokers::invoke_dex_cancel_orders_by_client_order_ids(
                     market_program_info.clone(),
@@ -2034,6 +2071,7 @@ impl Processor {
                     *ids,
                 )?;
             }
+            //settle funds /crank to get real reserves
             Invokers::invoke_dex_settle_funds(
                 market_program_info.clone(),
                 market_info.clone(),
@@ -2049,17 +2087,19 @@ impl Processor {
                 AUTHORITY_AMM,
                 amm.nonce as u8,
             )?;
-
+            //base token mint id checks
             if identity(market_state.coin_mint) != amm_coin_vault.mint.to_aligned_bytes()
                 || identity(market_state.coin_mint) != user_dest_coin.mint.to_aligned_bytes()
             {
                 return Err(AmmError::InvalidCoinMint.into());
             }
+            //quote/price token mint id checks
             if identity(market_state.pc_mint) != amm_pc_vault.mint.to_aligned_bytes()
                 || identity(market_state.pc_mint) != user_dest_pc.mint.to_aligned_bytes()
             {
                 return Err(AmmError::InvalidPCMint.into());
             }
+            //add in serum liquidity and subtract protocol fees
             Calculator::calc_total_without_take_pnl(
                 amm_pc_vault.amount,
                 amm_coin_vault.amount,
@@ -2070,18 +2110,20 @@ impl Processor {
                 &amm_open_orders_info,
             )?
         } else {
+            //subtract protocol fees from avbl liquidity
             Calculator::calc_total_without_take_pnl_no_orderbook(
                 amm_pc_vault.amount,
                 amm_coin_vault.amount,
                 &amm,
             )?
         };
-
+        //synced reserves with openbook
         let x1 = Calculator::normalize_decimal_v2(
             total_pc_without_take_pnl,
             amm.pc_decimals,
             amm.sys_decimal_value,
         );
+        //synced reserves with open book
         let y1 = Calculator::normalize_decimal_v2(
             total_coin_without_take_pnl,
             amm.coin_decimals,
@@ -2089,6 +2131,7 @@ impl Processor {
         );
 
         // calc and update pnl
+        //account for un-updated protocol fees and subtract from the reserves
         let mut delta_x: u128 = 0;
         let mut delta_y: u128 = 0;
         if amm.status != AmmStatus::WithdrawOnly.into_u64() {
@@ -2107,9 +2150,11 @@ impl Processor {
             token_input: withdraw.amount,
             token_total: amm.lp_amount,
         };
+        //coin/base amount to return
         let coin_amount = invariant
             .exchange_pool_to_token(total_coin_without_take_pnl, RoundDirection::Floor)
             .ok_or(AmmError::CalculationExRateFailure)?;
+        //pc amount/quote token
         let pc_amount = invariant
             .exchange_pool_to_token(total_pc_without_take_pnl, RoundDirection::Floor)
             .ok_or(AmmError::CalculationExRateFailure)?;
@@ -2819,7 +2864,7 @@ impl Processor {
                 if swap.amount_out >= total_pc_without_take_pnl {
                     return Err(AmmError::InsufficientFunds.into());
                 }
-
+                // cancel bids and asks
                 if enable_orderbook {
                     // coin -> pc, need cancel buy order
                     if !bids.is_empty() {
@@ -2854,6 +2899,7 @@ impl Processor {
                             )?;
                         }
                     }
+                    //settle openbook trade orders and free up liquidity for already processed tx
                     if swap.amount_out > amm_pc_vault.amount {
                         // need settle funds
                         Invokers::invoke_dex_settle_funds(
