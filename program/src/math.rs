@@ -52,7 +52,7 @@ impl Calculator {
     pub fn to_u64(val: u128) -> Result<u64, AmmError> {
         val.try_into().map_err(|_| AmmError::ConversionFailure)
     }
-
+    //equation (9 & 10) sqrt(x-last*y-last*x-current/y-current)
     pub fn calc_x_power(last_x: U256, last_y: U256, current_x: U256, current_y: U256) -> U256 {
         // must be use u256, because u128 may be overflow
         let x_power = last_x
@@ -86,6 +86,7 @@ impl Calculator {
     pub fn normalize_decimal(val: u64, native_decimal: u64, sys_decimal_value: u64) -> u64 {
         // e.g., amm.sys_decimal_value is 10**6, native_decimal is 10**9, price is 1.23, this function will convert (1.23*10**9) -> (1.23*10**6)
         //let ret:u64 = val.checked_mul(amm.sys_decimal_value).unwrap().checked_div((10 as u64).pow(native_decimal.into())).unwrap();
+         //multiply by target decimal and divide by native decimal
         let ret_mut = (U128::from(val))
             .checked_mul(sys_decimal_value.into())
             .unwrap();
@@ -258,6 +259,7 @@ impl Calculator {
             }
             // msg!("{:?}", event.as_view().unwrap());
             match event.as_view().unwrap() {
+                //consuming the events and updating balances in order account
                 EventView::Fill {
                     side,
                     maker,
@@ -271,6 +273,7 @@ impl Calculator {
                     client_order_id: _,
                 } => {
                     match side {
+                        //calculation of liquidity paid
                         Side::Bid if maker => {
                             native_pc_total -= native_qty_paid;
                             native_coin_total += native_qty_received;
@@ -300,13 +303,15 @@ impl Calculator {
         event_q_account: &'a AccountInfo,
         amm_open_account: &'a AccountInfo,
     ) -> Result<(u64, u64), AmmError> {
+        //processes events of fill (ask and bids) and calc liquidity in serum
         let (pc_total_in_serum, coin_total_in_serum) = Self::calc_exact_vault_in_serum(
             open_orders,
             market_state,
             event_q_account,
             amm_open_account,
         )?;
-
+        //adding current reserves with serum reserves and subtracting the fees earned by the raydium authority
+        //basically syncing from market pc and coin vault accounts
         let total_pc_without_take_pnl = pc_amount
             .checked_add(pc_total_in_serum)
             .ok_or(AmmError::CheckedAddOverflow)?
@@ -457,8 +462,10 @@ impl Calculator {
 /// The invariant calculator.
 pub struct InvariantToken {
     /// Token coin
+    /// total reserve of coin
     pub token_coin: u64,
     /// Token pc
+    /// total reserve of pc
     pub token_pc: u64,
 }
 
@@ -515,8 +522,10 @@ impl InvariantToken {
 /// The invariant calculator.
 pub struct InvariantPool {
     /// Token input
+    /// user s lp share
     pub token_input: u64,
     /// Token total
+    /// //total lp amount
     pub token_total: u64,
 }
 impl InvariantPool {
@@ -527,6 +536,7 @@ impl InvariantPool {
         round_direction: RoundDirection,
     ) -> Option<u64> {
         Some(if round_direction == RoundDirection::Floor {
+            //total coin amount * user lpshare/total lp
             U128::from(token_total_amount)
                 .checked_mul(self.token_input.into())
                 .unwrap()
@@ -534,6 +544,7 @@ impl InvariantPool {
                 .unwrap()
                 .as_u64()
         } else {
+                //total price amount * user lpshare/total lp
             U128::from(token_total_amount)
                 .checked_mul(self.token_input.into())
                 .unwrap()
@@ -546,6 +557,7 @@ impl InvariantPool {
     /// Exchange rate
     pub fn exchange_token_to_pool(
         &self,
+        //total lp
         pool_total_amount: u64,
         round_direction: RoundDirection,
     ) -> Option<u64> {
