@@ -623,7 +623,7 @@ impl StateData {
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct AmmInfo {
-    /// Initialized status.
+    /// Initialized statcd us.
     pub status: u64,
     /// Nonce used in program address.
     /// The program address is created deterministically with the nonce,
