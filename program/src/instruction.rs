@@ -60,6 +60,7 @@ pub struct DepositInstruction {
     /// the current exchange rate and size of the pool
     pub max_coin_amount: u64,
     pub max_pc_amount: u64,
+
     pub base_side: u64,
 }
 
