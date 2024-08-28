@@ -344,13 +344,13 @@ impl Processor {
         // calc pnl
         let mut delta_x: u128;
         let mut delta_y: u128;
-        //old y
+        //old y ylast
         let calc_pc_amount = Calculator::restore_decimal(
             target.calc_pnl_x.into(),
             amm.pc_decimals,
             amm.sys_decimal_value,
         );
-        //old x
+        //old x, x last
         let calc_coin_amount = Calculator::restore_decimal(
             target.calc_pnl_y.into(),
             amm.coin_decimals,
@@ -359,9 +359,16 @@ impl Processor {
         let pool_pc_amount = U128::from(*total_pc_without_take_pnl);
         let pool_coin_amount: U128 = U128::from(*total_coin_without_take_pnl);
         //new k is more than last k
+        //compare current k with last recorded k at prev deposit/withdraw ix
         if pool_pc_amount.checked_mul(pool_coin_amount).unwrap()
             >= (calc_pc_amount).checked_mul(calc_coin_amount).unwrap()
         {
+            //formula used is, price should be same i.e x_current(with fees)/ycurrent(with fees) =
+            //xafter(nofees)/yafter(no fees)
+            //also xlast and y last represent  last pool vaults without fees, so without fees
+            //xafter * yafter = xlast * y last (given no liquidity is added and only fee is in
+            //play, if so both of these quantities should be same since its the quantities without
+            //the fees)
             // last k is
             // let last_k: u128 = (target.calc_pnl_x as u128).checked_mul(target.calc_pnl_y as u128).unwrap();
             // current k is
@@ -386,10 +393,15 @@ impl Processor {
             // transfer to token_coin_pnl and token_pc_pnl
             // (x1 -x2) * pnl / sys_decimal_value
             //eq (11) xlast - x after
+            //x1 is total amount with accrued fees, x2 is total amount without fees
+            //difference gives the fees accrued 
             let diff_x = U128::from(x1.checked_sub(x2).unwrap().as_u128());
             //eq(11) y last - y after
+            //y1 is total amount with accrued fees, y2 is total amount without fees
+            //difference gives the fees accrued 
             let diff_y = U128::from(y1.checked_sub(y2).unwrap().as_u128());
             //calc fees per the protocol params
+//diff x represents , total amount x input * swap fees.numerator/denominator
             //xpnl = alpha(fees) * delta x
              delta_x = diff_x
                 .checked_mul(amm.fees.pnl_numerator.into())
@@ -397,6 +409,9 @@ impl Processor {
                 .checked_div(amm.fees.pnl_denominator.into())
                 .unwrap()
                 .as_u128();
+            //
+            //diff y represents , total amount y input * swap fees.numerator/denominator
+
             //ypnl = alpha(fees) * delta y
             delta_y = diff_y
                 .checked_mul(amm.fees.pnl_numerator.into())
@@ -405,16 +420,20 @@ impl Processor {
                 .unwrap()
                 .as_u128();
 
+            // increase in pc , decimal restored i.e x * x native_decimal/system decimal
             let diff_pc_pnl_amount =
                 Calculator::restore_decimal(diff_x, amm.pc_decimals, amm.sys_decimal_value);
+            // increase in coin, decimal restored i.e y * (y native_decimal)/system decimal
             let diff_coin_pnl_amount =
                 Calculator::restore_decimal(diff_y, amm.coin_decimals, amm.sys_decimal_value);
+            //diff pc pnl amount,native decimal diff in pc
             let pc_pnl_amount = diff_pc_pnl_amount
                 .checked_mul(amm.fees.pnl_numerator.into())
                 .unwrap()
                 .checked_div(amm.fees.pnl_denominator.into())
                 .unwrap()
                 .as_u64();
+            //diff coin pnl amount,native decimal diff in coin
             let coin_pnl_amount = diff_coin_pnl_amount
                 .checked_mul(amm.fees.pnl_numerator.into())
                 .unwrap()
@@ -1401,7 +1420,7 @@ impl Processor {
                 &amm,
             )?
         };
-
+//x1 is current pc amount / token 1 amount
         let x1 = Calculator::normalize_decimal_v2(
             total_pc_without_take_pnl,
             amm.pc_decimals,
@@ -1587,7 +1606,7 @@ impl Processor {
         amm.recent_epoch = Clock::get()?.epoch;
         Ok(())
     }
-    //admin only
+    //admin o ly
     pub fn process_withdrawpnl(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
         const ACCOUNT_LEN: usize = 17;
         let input_account_len = accounts.len();
@@ -2040,7 +2059,7 @@ impl Processor {
             let mut amm_order_ids_vec = Vec::new();
             let mut order_ids = [0u64; 8];
             let mut count = 0;
-            //gets all order ids and stores them in amm_order_ids_vec
+            //gets all order ids, (ask or bids) and stores them in amm_order_ids_vec
             for i in 0..std::cmp::max(bids.len(), asks.len()) {
                 if i < bids.len() {
                     order_ids[count] = bids[i].client_order_id();
@@ -2061,6 +2080,8 @@ impl Processor {
                 amm_order_ids_vec.push(order_ids);
             }
             //cancel dex order and then settle, no need to sync
+            //cancel all bids and asks order
+            //loop as you can cancel only 8 order ids at a time
             for ids in amm_order_ids_vec.iter() {
                 Invokers::invoke_dex_cancel_orders_by_client_order_ids(
                     market_program_info.clone(),
@@ -2076,6 +2097,8 @@ impl Processor {
                 )?;
             }
             //settle funds /crank to get real reserves
+            //after cancelling orders, settle funds from open order account
+            //after consuming the event queue and exit 
             Invokers::invoke_dex_settle_funds(
                 market_program_info.clone(),
                 market_info.clone(),
@@ -2103,7 +2126,7 @@ impl Processor {
             {
                 return Err(AmmError::InvalidPCMint.into());
             }
-            //add in serum liquidity and subtract protocol fees
+            //add in serum liquidity and subtract pending protocol fees
             Calculator::calc_total_without_take_pnl(
                 amm_pc_vault.amount,
                 amm_coin_vault.amount,
@@ -2114,7 +2137,7 @@ impl Processor {
                 &amm_open_orders_info,
             )?
         } else {
-            //subtract protocol fees from avbl liquidity
+            //subtract pending protocol fees from avbl liquidity
             Calculator::calc_total_without_take_pnl_no_orderbook(
                 amm_pc_vault.amount,
                 amm_coin_vault.amount,
@@ -2212,8 +2235,12 @@ impl Processor {
         }
 
         // step4: update target_orders.calc_pnl_x & target_orders.calc_pnl_y
+        //further subbed by deltax as x1 was the value before calcwithouttakepnl values were
+        //subtracted in calc pnl 
         target_orders.calc_pnl_x = x1
             .checked_sub(Calculator::normalize_decimal_v2(
+                //pc_amount is the amonut withdrawn by the user that is his share of the underlying
+                //pc amount relating to his share of lp,
                 pc_amount,
                 amm.pc_decimals,
                 amm.sys_decimal_value,
@@ -2222,8 +2249,13 @@ impl Processor {
             .checked_sub(U128::from(delta_x))
             .unwrap()
             .as_u128();
+          //further subbed by deltax as x1 was the value before calcwithouttakepnl values were
+        //subtracted in calc pnl
         target_orders.calc_pnl_y = y1
             .checked_sub(Calculator::normalize_decimal_v2(
+                  //coin amount is the amonut withdrawn by the user that is his share of the underlying
+                //coin amount relating to his share of lp,
+
                 coin_amount,
                 amm.coin_decimals,
                 amm.sys_decimal_value,
@@ -2376,6 +2408,7 @@ impl Processor {
             )?;
             let bids_orders = market_state.load_bids_mut(&market_bids_info)?;
             let asks_orders = market_state.load_asks_mut(&market_asks_info)?;
+            // this is only fetched to cancel order in the direction the swap is going
             (bids, asks) = Self::get_amm_orders(&open_orders, bids_orders, asks_orders)?;
             (total_pc_without_take_pnl, total_coin_without_take_pnl) =
                 Calculator::calc_total_without_take_pnl(

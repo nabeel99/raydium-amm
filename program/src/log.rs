@@ -155,7 +155,7 @@ pub fn encode_ray_log<T: Serialize>(log: T) {
     msg!(arrform!(LOG_SIZE, "ray_log: {}", msg_str).as_str());
 }
 
-pub fn decode_ray_log(log: &str) {
+pub fn decode_ray_log(log: &str) -> LogType {
     let bytes = base64::decode_config(log, base64::STANDARD).unwrap();
     match LogType::from_u8(bytes[0]) {
         LogType::Init => {
