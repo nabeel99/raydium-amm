@@ -86,7 +86,7 @@ impl Calculator {
     pub fn normalize_decimal(val: u64, native_decimal: u64, sys_decimal_value: u64) -> u64 {
         // e.g., amm.sys_decimal_value is 10**6, native_decimal is 10**9, price is 1.23, this function will convert (1.23*10**9) -> (1.23*10**6)
         //let ret:u64 = val.checked_mul(amm.sys_decimal_value).unwrap().checked_div((10 as u64).pow(native_decimal.into())).unwrap();
-         //multiply by target decimal and divide by native decimal
+        //multiply by target decimal and divide by native decimal
         let ret_mut = (U128::from(val))
             .checked_mul(sys_decimal_value.into())
             .unwrap();
@@ -330,12 +330,24 @@ impl Calculator {
         coin_amount: u64,
         amm: &'a AmmInfo,
     ) -> Result<(u64, u64), AmmError> {
+        msg!("in calc total without no orderbook");
         let total_pc_without_take_pnl = pc_amount
             .checked_sub(amm.state_data.need_take_pnl_pc)
             .ok_or(AmmError::CheckedSubOverflow)?;
         let total_coin_without_take_pnl = coin_amount
             .checked_sub(amm.state_data.need_take_pnl_coin)
             .ok_or(AmmError::CheckedSubOverflow)?;
+        //after reducing fees, amounts are :
+        msg!(
+            "calculated pnl , pc pnl {},coin pnl {}",
+            amm.state_data.need_take_pnl_pc,
+            amm.state_data.need_take_pnl_coin
+        );
+        msg!(
+            "total pc without take pnl {}, total coin without take pnl {}",
+            total_pc_without_take_pnl,
+            total_coin_without_take_pnl
+        );
         Ok((total_pc_without_take_pnl, total_coin_without_take_pnl))
     }
 
@@ -544,7 +556,7 @@ impl InvariantPool {
                 .unwrap()
                 .as_u64()
         } else {
-                //total price amount * user lpshare/total lp
+            //total price amount * user lpshare/total lp
             U128::from(token_total_amount)
                 .checked_mul(self.token_input.into())
                 .unwrap()

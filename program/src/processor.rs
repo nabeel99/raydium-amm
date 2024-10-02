@@ -344,20 +344,25 @@ impl Processor {
         // calc pnl
         let mut delta_x: u128;
         let mut delta_y: u128;
-        //old y
+        //old x without fees theoritcal y
         let calc_pc_amount = Calculator::restore_decimal(
             target.calc_pnl_x.into(),
             amm.pc_decimals,
             amm.sys_decimal_value,
         );
-        //old x
+        //old y without fees theorteical x
         let calc_coin_amount = Calculator::restore_decimal(
             target.calc_pnl_y.into(),
             amm.coin_decimals,
             amm.sys_decimal_value,
         );
+        msg!("amm sys decimals {}",amm.sys_decimal_value);
+        msg!("old theoretical pc amount {}, old theoretical coin amount {}",calc_pc_amount,calc_coin_amount);
         let pool_pc_amount = U128::from(*total_pc_without_take_pnl);
         let pool_coin_amount: U128 = U128::from(*total_coin_without_take_pnl);
+        let k =  pool_pc_amount.checked_mul(pool_coin_amount).unwrap();
+        msg!("k is {}",k);
+
         //new k is more than last k
         if pool_pc_amount.checked_mul(pool_coin_amount).unwrap()
             >= (calc_pc_amount).checked_mul(calc_coin_amount).unwrap()
@@ -382,15 +387,23 @@ impl Processor {
             //y-after = (xafter * y-current)/x-current eq (11)
             let y2 = x2.checked_mul(y1).unwrap().checked_div(x1).unwrap();
             // msg!(arrform!(LOG_SIZE, "calc_take_pnl y2:{}", y2).as_str());
+            msg!(" xafter {} , yafter {}",x2,y2);
 
             // transfer to token_coin_pnl and token_pc_pnl
             // (x1 -x2) * pnl / sys_decimal_value
             //eq (11) xlast - x after
+            //diff X IS FEES IN X COMPONENT IN NORMALISED DECIMALS
             let diff_x = U128::from(x1.checked_sub(x2).unwrap().as_u128());
+            //diff y is fees in y component normalised
+            //
             //eq(11) y last - y after
             let diff_y = U128::from(y1.checked_sub(y2).unwrap().as_u128());
             //calc fees per the protocol params
             //xpnl = alpha(fees) * delta x
+            //diff x and diff y is the fees of each token
+            msg!("pending fees accrued in pc {}",diff_x);
+            msg!("pending fees accrued in coin {}",diff_y);
+            //delta x is protocol component fees of pc in normalised form
              delta_x = diff_x
                 .checked_mul(amm.fees.pnl_numerator.into())
                 .unwrap()
@@ -398,31 +411,43 @@ impl Processor {
                 .unwrap()
                 .as_u128();
             //ypnl = alpha(fees) * delta y
+            //delta x is protocol component fees of coin in normalised form
             delta_y = diff_y
                 .checked_mul(amm.fees.pnl_numerator.into())
                 .unwrap()
                 .checked_div(amm.fees.pnl_denominator.into())
                 .unwrap()
                 .as_u128();
+            msg!("pnl numerator {},pnl denominator {}",amm.fees.pnl_numerator,amm.fees.pnl_denominator);
+            msg!("pnl numerator {},pnl denominator {}",amm.fees.pnl_numerator,amm.fees.pnl_denominator);
+            msg!("protocol portion of pc fees in normalised form {}",delta_x);
+            msg!("protocol portion of coin fees in normalised form {}",delta_y);
+
 
             let diff_pc_pnl_amount =
                 Calculator::restore_decimal(diff_x, amm.pc_decimals, amm.sys_decimal_value);
             let diff_coin_pnl_amount =
                 Calculator::restore_decimal(diff_y, amm.coin_decimals, amm.sys_decimal_value);
+            //pc pnl and coin pnl basically are delta x and delta y but with restored decimals
+            //pc pnl is protocol portion of swap fees in unormalised form
             let pc_pnl_amount = diff_pc_pnl_amount
                 .checked_mul(amm.fees.pnl_numerator.into())
                 .unwrap()
                 .checked_div(amm.fees.pnl_denominator.into())
                 .unwrap()
                 .as_u64();
+            //protocol portion of coin swap fees in unormalised form
             let coin_pnl_amount = diff_coin_pnl_amount
                 .checked_mul(amm.fees.pnl_numerator.into())
                 .unwrap()
                 .checked_div(amm.fees.pnl_denominator.into())
                 .unwrap()
                 .as_u64();
+            msg!("protocol portion of pc fees in unormalised form {}",delta_x);
+            msg!("protocol portion of coin fees in unormalised form {}",delta_y);
             if pc_pnl_amount != 0 && coin_pnl_amount != 0 {
                 // step2: save total_pnl_pc & total_pnl_coin
+                // store total fees not just the protocol fees
                 amm.state_data.total_pnl_pc = amm
                     .state_data
                     .total_pnl_pc
@@ -433,6 +458,9 @@ impl Processor {
                     .total_pnl_coin
                     .checked_add(diff_coin_pnl_amount.as_u64())
                     .unwrap();
+                let old_pending_pc_pnl = amm.state_data.need_take_pnl_pc;
+                let old_pending_coin_pnl = amm.state_data.need_take_pnl_coin;
+                msg!("old pending pc pnl {},old pending pnl coin {}",old_pending_pc_pnl,old_pending_coin_pnl);
                 amm.state_data.need_take_pnl_pc = amm
                     .state_data
                     .need_take_pnl_pc
@@ -444,10 +472,15 @@ impl Processor {
                     .checked_add(coin_pnl_amount)
                     .unwrap();
 
+                    msg!("new pending pnl , pc pnl {},coin pnl {}",amm.state_data.need_take_pnl_pc,amm.state_data.need_take_pnl_coin);
+                    msg!("fees accrued in unpending state  pnl : {}, coin : {}",amm.state_data.need_take_pnl_pc - old_pending_pc_pnl,amm.state_data.need_take_pnl_coin - old_pending_coin_pnl);
+
                 // step3: update total_coin and total_pc without pnl
+                // remove protocol component of fees from pc
                 *total_pc_without_take_pnl = (*total_pc_without_take_pnl)
                     .checked_sub(pc_pnl_amount)
                     .unwrap();
+ // remove protocol component of fees from coin 
                 *total_coin_without_take_pnl = (*total_coin_without_take_pnl)
                     .checked_sub(coin_pnl_amount)
                     .unwrap();
@@ -467,6 +500,7 @@ impl Processor {
             .as_str());
             return Err(AmmError::CalcPnlError.into());
         }
+        msg!("pc after pnl {},coin after pnl {}",total_pc_without_take_pnl,total_coin_without_take_pnl);
 
         Ok((delta_x, delta_y))
     }
@@ -1401,19 +1435,26 @@ impl Processor {
                 &amm,
             )?
         };
-
+        msg!(" pending pnl calc un-normalised  , coin vault amount : {} , pc vault amounts : {}",total_coin_without_take_pnl,total_pc_without_take_pnl);
+        //normalise both to a common system decimal
         let x1 = Calculator::normalize_decimal_v2(
             total_pc_without_take_pnl,
             amm.pc_decimals,
             amm.sys_decimal_value,
         );
+                //normalise both to a common system decimal
         let y1 = Calculator::normalize_decimal_v2(
             total_coin_without_take_pnl,
             amm.coin_decimals,
             amm.sys_decimal_value,
         );
+        msg!("normalised pc {}",x1);
+                msg!("normalised coin {}",y1);
+
         // calc and update pnl, unaccount for tracking, subtractin reserves after syncing real protocol fees
         //from the orders in openbook
+        //delta x : protocol portion of pc fees in unormalised form
+        //deltay : protocol portion of coin fees in unnormalised form
         let (delta_x, delta_y) = Self::calc_take_pnl(
             &target_orders,
             &mut amm,
@@ -1422,6 +1463,8 @@ impl Processor {
             x1.as_u128().into(),
             y1.as_u128().into(),
         )?;
+        msg!("AFTER pending pnl calc , coin vault amount : {} , pc vault amounts : {}",total_coin_without_take_pnl,total_pc_without_take_pnl);
+        msg!("protocol portion of pc fees in unnormalised form {} , protocol portion of coin fees in unnormalised form {}",delta_x,delta_y);
         let invariant = InvariantToken {
             token_coin: total_coin_without_take_pnl,
             token_pc: total_pc_without_take_pnl,
@@ -1556,14 +1599,19 @@ impl Processor {
         Invokers::token_mint_to(
             token_program_info.clone(),
             amm_lp_mint_info.clone(),
-            user_dest_lp_info.clone(),
+           user_dest_lp_info.clone(),
             amm_authority_info.clone(),
             AUTHORITY_AMM,
             amm.nonce as u8,
             mint_lp_amount,
         )?;
         amm.lp_amount = amm.lp_amount.checked_add(mint_lp_amount).unwrap();
-
+        msg!("new lp amount after deposit {}",amm.lp_amount);
+        //x1 normalised form of pc amount
+        //y1 normalised form of coin amount
+        //calc pnl last theoretical x without change in k
+        // add addiitional pc liquidity into current x1 vault after normalisation and remove
+        // normalised pnl that exist in x1 
         target_orders.calc_pnl_x = x1
             .checked_add(Calculator::normalize_decimal_v2(
                 deduct_pc_amount,
@@ -1571,6 +1619,8 @@ impl Processor {
                 amm.sys_decimal_value,
             ))
             .unwrap()
+                    // normalised pnl that exist in x1 
+
             .checked_sub(U128::from(delta_x))
             .unwrap()
             .as_u128();
@@ -1581,6 +1631,7 @@ impl Processor {
                 amm.sys_decimal_value,
             ))
             .unwrap()
+            //subtract normalised pnl that exist in y1
             .checked_sub(U128::from(delta_y))
             .unwrap()
             .as_u128();
@@ -1998,10 +2049,13 @@ impl Processor {
         if withdraw.amount > user_source_lp.amount {
             return Err(AmmError::InsufficientFunds.into());
         }
+        solana_program::msg!("address {},withdraw amount {},lp_mint_supply {}, lp amount {}",amm_lp_mint_info.key,withdraw.amount,lp_mint.supply,amm.lp_amount);
         //ensure withdraw amount is 1 < lp _ amount
-        if withdraw.amount > lp_mint.supply || withdraw.amount >= amm.lp_amount {
-            return Err(AmmError::NotAllowZeroLP.into());
-        }
+        // if withdraw.amount > lp_mint.supply || withdraw.amount >= amm.lp_amount {
+        //     return Err(AmmError::NotAllowZeroLP.into());
+        // }
+                  solana_program::msg!("is orderbook enabled {}",enable_orderbook);
+
         let (mut total_pc_without_take_pnl, mut total_coin_without_take_pnl) =
         
         //cancels order book orders(asks and bids) ifZ
@@ -2161,8 +2215,9 @@ impl Processor {
         //pc amount/quote token
         let pc_amount = invariant
             .exchange_pool_to_token(total_pc_without_take_pnl, RoundDirection::Floor)
-            .ok_or(AmmError::CalculationExRateFailure)?;
 
+            .ok_or(AmmError::CalculationExRateFailure)?;
+solana_program::msg!("true pc reserve : {}, true coin reserve {}",total_pc_without_take_pnl,total_coin_without_take_pnl);
         encode_ray_log(WithdrawLog {
             log_type: LogType::Withdraw.into_u8(),
             withdraw_lp: withdraw.amount,
@@ -2388,6 +2443,7 @@ impl Processor {
                     &amm_open_orders_info,
                 )?;
         } else {
+            msg!("order book not enabled");
             (total_pc_without_take_pnl, total_coin_without_take_pnl) =
                 Calculator::calc_total_without_take_pnl_no_orderbook(
                     amm_pc_vault.amount,
@@ -2398,10 +2454,14 @@ impl Processor {
 
         let swap_direction;
         if user_source.mint == amm_coin_vault.mint && user_destination.mint == amm_pc_vault.mint {
+                            msg!("giving input coin and tkaing out pc");
+
             swap_direction = SwapDirection::Coin2PC
         } else if user_source.mint == amm_pc_vault.mint
             && user_destination.mint == amm_coin_vault.mint
         {
+                            msg!("giving input pc and taking out coin");
+
             swap_direction = SwapDirection::PC2Coin
         } else {
             return Err(AmmError::InvalidUserToken.into());
@@ -2425,7 +2485,9 @@ impl Processor {
             .checked_ceil_div(amm.fees.swap_fee_denominator.into())
             .unwrap()
             .0;
+        msg!("swap base in : swap fee is :  {}",swap_fee);
         let swap_in_after_deduct_fee = U128::from(swap.amount_in).checked_sub(swap_fee).unwrap();
+        msg!("swap in afer fee deduct : {}",swap_in_after_deduct_fee);
         let swap_amount_out = Calculator::swap_token_amount_base_in(
             swap_in_after_deduct_fee,
             total_pc_without_take_pnl.into(),
@@ -2433,6 +2495,7 @@ impl Processor {
             swap_direction,
         )
         .as_u64();
+        msg!("swap amount out : {} ",swap_amount_out);
         encode_ray_log(SwapBaseInLog {
             log_type: LogType::SwapBaseIn.into_u8(),
             amount_in: swap.amount_in,
@@ -2827,6 +2890,7 @@ impl Processor {
             total_coin_without_take_pnl.into(),
             swap_direction,
         );
+        msg!("swapinput before adding fees, original amount {}",swap_in_before_add_fee);
         // swap_in_after_add_fee * (1 - 0.0025) = swap_in_before_add_fee
         // swap_in_after_add_fee = swap_in_before_add_fee / (1 - 0.0025)
         let swap_in_after_add_fee = swap_in_before_add_fee
@@ -2842,9 +2906,11 @@ impl Processor {
             .unwrap()
             .0
             .as_u64();
+        msg!("swap input after we add fees {}",swap_in_after_add_fee);
         let swap_fee = swap_in_after_add_fee
             .checked_sub(swap_in_before_add_fee.as_u64())
             .unwrap();
+        msg!("swap fee is {}",swap_fee);
         encode_ray_log(SwapBaseOutLog {
             log_type: LogType::SwapBaseOut.into_u8(),
             max_in: swap.max_amount_in,
